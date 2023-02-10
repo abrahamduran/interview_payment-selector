@@ -1,12 +1,12 @@
 // Your task is to finish this application to satisfy requirements below and make it look like on the attached screenshots. Try to use 80/20 principle.
 // Good luck! 🍀
 
-// 1. Setup UI of the ContentView. Try to keep it as similar as possible.
-// 2. Subscribe to the timer and count seconds down from 60 to 0 on the ContentView.
-// 3. Present PaymentModalView as a sheet after tapping on the "Open payment" button.
-// 4. Load payment types from repository in PaymentInfoView. Show loader when waiting for the response. No need to handle error.
+// ✅ 1. Setup UI of the ContentView. Try to keep it as similar as possible.
+// ✅ 2. Subscribe to the timer and count seconds down from 60 to 0 on the ContentView.
+// ✅ 3. Present PaymentModalView as a sheet after tapping on the "Open payment" button.
+// ✅ 4. Load payment types from repository in PaymentInfoView. Show loader when waiting for the response. No need to handle error.
 // 5. List should be refreshable.
-// 6. Show search bar for the list to filter payment types. You can filter items in any way.
+// ✅ 6. Show search bar for the list to filter payment types. You can filter items in any way.
 // 7. User should select one of the types on the list. Show checkmark next to the name when item is selected.
 // 8. Show "Done" button in navigation bar only if payment type is selected. Tapping this button should hide the modal.
 // 9. Show "Finish" button on ContentScreen only when "payment type" was selected.
@@ -16,29 +16,80 @@ import SwiftUI
 import Combine
 
 class Model: ObservableObject {
-
-    let processDurationInSeconds: Int = 60
+    @Published var processDurationInSeconds: Int = 60
     var repository: PaymentTypesRepository = PaymentTypesRepositoryImplementation()
     var cancellables: [AnyCancellable] = []
 
     init() {
-//        Timer.publish(every: 1, on: .main, in: .common)
-//            .autoconnect()
-//            .store(in: &cancellables)
+        Timer.publish(every: 1, on: .main, in: .common)
+            .autoconnect()
+            .sink { [weak self] _ in
+                guard let self = self,
+                      self.processDurationInSeconds > .zero
+                else { return }
+                
+                self.processDurationInSeconds -= 1
+            }
+            .store(in: &cancellables)
     }
 }
 
 struct ContentView: View {
+    @StateObject private var model = Model()
+    @State private var presentPaymentView = false
+    
     var body: some View {
+        ZStack {
+            background
+            content
+        }
+        .sheet(
+            isPresented: $presentPaymentView,
+            content: PaymentModalView.init
+        )
+    }
+    
+    private var content: some View {
         VStack {
+            Spacer()
+            
             // Seconds should count down from 60 to 0
-            Text("You have only 60 seconds left to get the discount")
+            Text("You have only \(model.processDurationInSeconds) seconds left to get the discount")
+                .foregroundColor(.white)
+                .font(.title.bold())
+                .multilineTextAlignment(.center)
 
-            Button("Open payment", action: {})
+            Spacer()
+            
+            Button(action: {
+                presentPaymentView.toggle()
+            }) {
+                Text("Open payment")
+                .padding()
+                .frame(maxWidth: .infinity)
+                .background(
+                    Color.white
+                        .cornerRadius(16)
+                )
+            }
 
             // Visible only if payment type is selected
-            Button("Finish", action: {})
+            Button(action: {}) {
+                Text("Finish")
+                .padding()
+                .frame(maxWidth: .infinity)
+                .background(
+                    Color.white
+                        .cornerRadius(16)
+                )
+            }
+            .hidden()
         }
+        .padding(.horizontal)
+    }
+    
+    private var background: some View {
+        Color.blue.ignoresSafeArea()
     }
 }
 
@@ -56,7 +107,41 @@ struct PaymentModalView : View {
     }
 }
 
+final class PaymentInfoViewModel: ObservableObject {
+    @Published private(set) var isLoading = true
+    @Published private(set) var paymentTypes: [PaymentType] = []
+    @Published private(set) var searchResults: [PaymentType] = []
+    @Published var queryString = ""
+    
+    init(repository: PaymentTypesRepository = PaymentTypesRepositoryImplementation()) {
+        repository.getTypes { [weak self] result in
+            self?.isLoading = false
+            guard case let .success(types) = result else {
+                return
+            }
+            self?.paymentTypes = types
+        }
+        
+        configureSearch()
+    }
+    
+    private func configureSearch() {
+        $queryString
+            .map { [weak self] text in
+//                guard !text.isEmpty else {
+//                    self?.searchResults = self?.paymentTypes ?? []
+//                    return
+//                }
+                let types = self?.paymentTypes ?? []
+                return types.filter { $0.name.contains(text) }
+            }
+            .assign(to: &$searchResults)
+    }
+}
+
 struct PaymentInfoView: View {
+    @StateObject private var model = PaymentInfoViewModel()
+    
     var body: some View {
         // Load payment types when presenting the view. Repository has 2 seconds delay.
         // User should select an item.
@@ -70,11 +155,29 @@ struct PaymentInfoView: View {
         // Finish button should be only available if user selected payment type.
         // Tapping on Finish button should close the modal.
 
-        List {
-            Text("Placeholder")
+        ZStack {
+            content
         }
         .navigationTitle("Payment info")
         .navigationBarItems(trailing: Button("Done", action: {}))
+    }
+    
+    @ViewBuilder
+    private var content: some View {
+        if model.isLoading {
+            ProgressView()
+        } else {
+            paymentTypeList
+        }
+    }
+    
+    private var paymentTypeList: some View {
+        List {
+            ForEach(model.paymentTypes) { paymentType in
+                Text(paymentType.name)
+            }
+        }
+        .searchable(text: $model.queryString)
     }
 }
 
