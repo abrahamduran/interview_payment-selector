@@ -1,6 +1,7 @@
 import Foundation
+import Combine
 
-struct PaymentType: Identifiable {
+struct PaymentType: Identifiable, Equatable {
     var id = UUID().uuidString
     var name: String
 }
@@ -28,5 +29,16 @@ class PaymentTypesRepositoryImplementation: PaymentTypesRepository {
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
             completion(.success(self.types))
         }
+    }
+}
+
+extension PaymentTypesRepository {
+    func getTypesPublisher() -> AnyPublisher<[PaymentType], PaymentError> {
+        Deferred {
+            Future {
+                self.getTypes(completion: $0)
+            }
+        }
+        .eraseToAnyPublisher()
     }
 }

@@ -5,19 +5,19 @@
 // ✅ 2. Subscribe to the timer and count seconds down from 60 to 0 on the ContentView.
 // ✅ 3. Present PaymentModalView as a sheet after tapping on the "Open payment" button.
 // ✅ 4. Load payment types from repository in PaymentInfoView. Show loader when waiting for the response. No need to handle error.
-// 5. List should be refreshable.
+// ✅ 5. List should be refreshable.
 // ✅ 6. Show search bar for the list to filter payment types. You can filter items in any way.
-// 7. User should select one of the types on the list. Show checkmark next to the name when item is selected.
-// 8. Show "Done" button in navigation bar only if payment type is selected. Tapping this button should hide the modal.
-// 9. Show "Finish" button on ContentScreen only when "payment type" was selected.
-// 10. Replace main view with "FinishView" when user taps on the "Finish" button.
+// ✅ 7. User should select one of the types on the list. Show checkmark next to the name when item is selected.
+// ✅ 8. Show "Done" button in navigation bar only if payment type is selected. Tapping this button should hide the modal.
+// ✅ 9. Show "Finish" button on ContentScreen only when "payment type" was selected.
+// ✅ 10. Replace main view with "FinishView" when user taps on the "Finish" button.
 
 import SwiftUI
 import Combine
 
 class Model: ObservableObject {
     @Published var processDurationInSeconds: Int = 60
-    var repository: PaymentTypesRepository = PaymentTypesRepositoryImplementation()
+    @Published var selectedPayment: PaymentType?
     var cancellables: [AnyCancellable] = []
 
     init() {
@@ -37,16 +37,20 @@ class Model: ObservableObject {
 struct ContentView: View {
     @StateObject private var model = Model()
     @State private var presentPaymentView = false
+    @State private var isFinishPresented = false
     
     var body: some View {
-        ZStack {
-            background
-            content
+        if isFinishPresented {
+            FinishView()
+        } else {
+            ZStack {
+                background
+                content
+            }
+            .sheet(isPresented: $presentPaymentView) {
+                PaymentModalView(selectedPayment: $model.selectedPayment)
+            }
         }
-        .sheet(
-            isPresented: $presentPaymentView,
-            content: PaymentModalView.init
-        )
     }
     
     private var content: some View {
@@ -73,17 +77,17 @@ struct ContentView: View {
                 )
             }
 
-            // Visible only if payment type is selected
-            Button(action: {}) {
-                Text("Finish")
-                .padding()
-                .frame(maxWidth: .infinity)
-                .background(
-                    Color.white
-                        .cornerRadius(16)
-                )
+            if model.selectedPayment != nil {
+                Button(action: { isFinishPresented.toggle() }) {
+                    Text("Finish")
+                        .padding()
+                        .frame(maxWidth: .infinity)
+                        .background(
+                            Color.white
+                                .cornerRadius(16)
+                        )
+                }
             }
-            .hidden()
         }
         .padding(.horizontal)
     }
@@ -100,47 +104,70 @@ struct FinishView: View {
 }
 
 struct PaymentModalView : View {
+    @Binding var selectedPayment: PaymentType?
+    
     var body: some View {
         NavigationView {
-            PaymentInfoView()
+            PaymentInfoView(selectedType: $selectedPayment)
         }
     }
 }
 
 final class PaymentInfoViewModel: ObservableObject {
-    @Published private(set) var isLoading = true
-    @Published private(set) var paymentTypes: [PaymentType] = []
-    @Published private(set) var searchResults: [PaymentType] = []
+    @Published private(set) var isLoading = false
+    @Published private(set) var results: [PaymentType] = []
+    @Published private var paymentTypes: [PaymentType] = []
     @Published var queryString = ""
+    let refresh = PassthroughSubject<Void, Never>()
     
     init(repository: PaymentTypesRepository = PaymentTypesRepositoryImplementation()) {
-        repository.getTypes { [weak self] result in
-            self?.isLoading = false
-            guard case let .success(types) = result else {
-                return
-            }
-            self?.paymentTypes = types
-        }
-        
+        configurePaymentTypes(repository: repository)
+        configureResults()
         configureSearch()
+    }
+    
+    private func configurePaymentTypes(repository: PaymentTypesRepository) {
+        let fetch = refresh
+            .share()
+        
+        fetch
+            .map { true }
+            .assign(to: &$isLoading)
+        
+        let types = fetch
+            .flatMap {
+                repository.getTypesPublisher()
+                    .catch { _ in Empty() }
+            }
+            .share()
+        
+        types
+            .map { _ in false }
+            .assign(to: &$isLoading)
+        
+        types
+            .assign(to: &$paymentTypes)
+    }
+    var cancellables = Set<AnyCancellable>()
+    private func configureResults() {
+        $paymentTypes
+            .assign(to: &$results)
     }
     
     private func configureSearch() {
         $queryString
-            .map { [weak self] text in
-//                guard !text.isEmpty else {
-//                    self?.searchResults = self?.paymentTypes ?? []
-//                    return
-//                }
-                let types = self?.paymentTypes ?? []
-                return types.filter { $0.name.contains(text) }
+            .combineLatest($paymentTypes)
+            .map { (text, types) in
+                types.filter { $0.name.contains(text) || text.isEmpty }
             }
-            .assign(to: &$searchResults)
+            .assign(to: &$results)
     }
 }
 
 struct PaymentInfoView: View {
+    @Environment(\.dismiss) private var dismiss
     @StateObject private var model = PaymentInfoViewModel()
+    @Binding var selectedType: PaymentType?
     
     var body: some View {
         // Load payment types when presenting the view. Repository has 2 seconds delay.
@@ -155,29 +182,50 @@ struct PaymentInfoView: View {
         // Finish button should be only available if user selected payment type.
         // Tapping on Finish button should close the modal.
 
-        ZStack {
-            content
-        }
-        .navigationTitle("Payment info")
-        .navigationBarItems(trailing: Button("Done", action: {}))
-    }
-    
-    @ViewBuilder
-    private var content: some View {
-        if model.isLoading {
-            ProgressView()
-        } else {
+        VStack {
+            if model.isLoading {
+                ProgressView()
+            }
+            
             paymentTypeList
         }
+        .onAppear(perform: model.refresh.send)
+        .navigationTitle("Payment info")
+        .navigationBarItems(trailing: doneButton)
     }
     
     private var paymentTypeList: some View {
         List {
-            ForEach(model.paymentTypes) { paymentType in
-                Text(paymentType.name)
+            ForEach(model.results) { result in
+                Button(action: {
+                    selectedType = result
+                }) {
+                    HStack {
+                        Text(result.name)
+                        
+                        Spacer()
+                        
+                        if selectedType == result {
+                            Image(systemName: "checkmark")
+                        }
+                    }
+                    .foregroundColor(.black)
+                }
             }
         }
         .searchable(text: $model.queryString)
+        .refreshable {
+            model.refresh.send(())
+        }
+    }
+    
+    @ViewBuilder
+    private var doneButton: some View {
+        if selectedType == nil {
+            EmptyView()
+        } else {
+            Button("Done", action: dismiss.callAsFunction)
+        }
     }
 }
 
